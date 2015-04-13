@@ -38,6 +38,7 @@ import org.apache.maven.scm.provider.git.gitexe.command.branch.GitBranchCommand;
 import org.apache.maven.scm.provider.git.gitexe.command.status.GitStatusCommand;
 import org.apache.maven.scm.provider.git.gitexe.command.status.GitStatusConsumer;
 import org.codehaus.plexus.util.FileUtils;
+import org.codehaus.plexus.util.Os;
 import org.codehaus.plexus.util.cli.CommandLineUtils;
 import org.codehaus.plexus.util.cli.Commandline;
 
@@ -45,6 +46,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -66,7 +68,7 @@ public class GitCheckInCommand
         CommandLineUtils.StringStreamConsumer stderr = new CommandLineUtils.StringStreamConsumer();
         CommandLineUtils.StringStreamConsumer stdout = new CommandLineUtils.StringStreamConsumer();
 
-        int exitCode;
+        int exitCode = -1;
 
         File messageFile = FileUtils.createTempFile( "maven-scm-", ".commit", null );
         try
@@ -86,14 +88,33 @@ public class GitCheckInCommand
                 // if specific fileSet is given, we have to git-add them first
                 // otherwise we will use 'git-commit -a' later
 
-                Commandline clAdd = GitAddCommand.createCommandLine( fileSet.getBasedir(), fileSet.getFileList() );
+                Commandline clAdd = null;
 
-                exitCode = GitCommandLineUtils.execute( clAdd, stdout, stderr, getLogger() );
+                //SCM-714: Workaround for the Windows terminal command limit
+                if ( Os.isFamily( Os.FAMILY_WINDOWS ) ) 
+                {
+                    for ( File file: fileSet.getFileList() ) 
+                    {
+                        clAdd = GitAddCommand.createCommandLine( fileSet.getBasedir(), 
+                                                                 Collections.singletonList( file ) );
+                        exitCode = GitCommandLineUtils.execute( clAdd, stdout, stderr, getLogger() );
+                        
+                        if ( exitCode != 0 ) 
+                        {
+                            break;
+                        }
+                    }
+                } 
+                else 
+                {
+                    clAdd = GitAddCommand.createCommandLine( fileSet.getBasedir(), fileSet.getFileList() );
+                    exitCode = GitCommandLineUtils.execute( clAdd, stdout, stderr, getLogger() );
+                }
 
                 if ( exitCode != 0 )
                 {
-                    return new CheckInScmResult( clAdd.toString(), "The git-add command failed.", stderr.getOutput(),
-                                                 false );
+                    return new CheckInScmResult( clAdd.toString(), "The git-add command failed.", 
+                                                 stderr.getOutput(), false );
                 }
 
             }
@@ -144,8 +165,11 @@ public class GitCheckInCommand
             {
                 return new CheckInScmResult( null, statusConsumer.getChangedFiles() );
             }
-
-            Commandline clCommit = createCommitCommandLine( repository, fileSet, messageFile );
+            
+            //SCM-714: Workaround for the Windows terminal command limit
+            //
+            Commandline clCommit = createCommitCommandLine( repository, new ScmFileSet( fileSet.getBasedir() ),
+                                                            messageFile );
 
             exitCode = GitCommandLineUtils.execute( clCommit, stdout, stderr, getLogger() );
             if ( exitCode != 0 )
